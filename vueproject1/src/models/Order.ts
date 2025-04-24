@@ -1,9 +1,13 @@
 import { Item } from "./Item";
-import { User } from "./User";
 
 export interface Order {
     orderId: number,
+    orderSubTotal: number,
+    orderDiscountAmount: number,
+    orderPreTaxTotal: number,
+    orderTaxAmount: number,
     orderTotal: number,
-    orderTaker: User,
-    orderItems: Item[]
+    orderTaker: number,
+    orderItems: Item[],
+    orderDate: number
 }

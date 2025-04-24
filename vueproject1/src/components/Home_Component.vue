@@ -1,9 +1,4 @@
 <template>
-    <!--<div id="item-selection">
-        <div v-for="(item, index) in itemData" v-bind:key="index">
-            <b-button pill variant="outline-secondary">{{item.itemName}}</b-button>
-        </div>
-    </div>-->
     <b-container fluid id="new-order-container">
         <b-row class="full-height-row">
             <b-col cols="9" id="item-view" class="overflow-auto">
@@ -22,18 +17,28 @@
             <b-col cols="3" id="details-view">
                 <h3>Order Details</h3>
                 <div id="order-items" class="overflow-auto">
+                    <p v-if="selectedItems.length == 0">No items selected</p>
                     <div v-for="item in selectedItems" :key="item.itemId">
                         {{item.itemName}}
                         ${{item.itemPrice}}
                         <b-button @click="removeItem(item)" class="nav-button food-item" variant="danger">Remove</b-button>
                     </div>
                 </div>
+                <div>
+                    <b-dropdown id="discount-dropdown" text="Discount" class="m-md-2">
+                        <b-dropdown-item @click="discountSelected(null)">None</b-dropdown-item>
+                        <b-dropdown-item @click="discountSelected(discount)" v-for="discount in discounts" :key="discount.discountId">{{discount.discountName}}</b-dropdown-item>
+                    </b-dropdown>
+                </div>
                 <div id="money-details">
                     <p>Sub Total: ${{subTotal}}</p>
-                    <p>Discount Amount: ${{0}}</p>
-                    <p>Pre Tax: ${{0}}</p>
-                    <p>Tax Amount: ${{0}}</p>
-                    <p>Total: ${{0}}</p>
+                    <div>
+                        Discount: {{selectedDiscountName}}
+                    </div>
+                    <p>Discount Amount: ${{discountAmount}}</p>
+                    <p>Pre Tax: ${{preTax}}</p>
+                    <p>Tax Amount: ${{taxAmount}}</p>
+                    <p>Total: ${{total}}</p>
                     <b-button @click="placeOrder" class="nav-button" variant="primary">Place Order</b-button>
                 </div>
             </b-col>
@@ -42,11 +47,14 @@
 </template>
 
 <script setup lang="ts">
-    import { onMounted, ref } from 'vue';
+    import { onMounted, ref, defineProps } from 'vue';
     import { DataService } from '../data/DataService';
     import { Pair } from '../data/Pair';
+    import { Discount } from '../models/Discount';
     import { Item } from '../models/Item';
     import { ItemTypes } from '../models/ItemTypes';
+    import { TaxType } from '../models/TaxType';
+    import { UserInfo } from '../models/UserInfo';
 
     const dataService = new DataService();
 
@@ -54,38 +62,124 @@
     let itemTypes: ItemTypes[] = [];
 
     //Refs
+    let discounts = ref<Discount[]>([]);
+    let taxTypes = ref<TaxType[]>([]);
     let sortedItems = ref<Pair<string, Item[]>[]>([]);
     let selectedItems = ref<Item[]>([]);
+    let selectedDiscount = ref<Discount>(null);
+    let selectedDiscountName = ref<string>("No discount selected");
+
     let subTotal = ref<number>(0);
+
+    let discountAmount = ref<number>(0);
+
+    let preTax = ref<number>(0);
+
+    let taxAmount = ref<number>(0);
+
+    let total = ref<number>(0);
+
+    const props = defineProps({
+        user: UserInfo,
+    });
 
     onMounted(async () => {
         //Get item data
         await dataService.getItems().then(response => {
-            itemData = response;
+            if (response != null) {
+                itemData = response;
+            }
         });
 
         //Get item types
         await dataService.getItemTypes().then(response => {
-            itemTypes = response;
-            let sorted = sortItemsByType(itemTypes, itemData);
-            sorted.forEach(item => {
-                sortedItems.value.push(item);
-            });
+            if (response != null) {
+                itemTypes = response;
+
+                let sorted = sortItemsByType(itemTypes, itemData);
+                sorted.forEach(item => {
+                    sortedItems.value.push(item);
+                });
+            }
+        });
+
+        await dataService.getDiscounts().then(response => {
+            if (response != null) {
+                response.forEach(d => {
+                    discounts.value.push(d);
+                });
+            }
+        });
+
+        await dataService.getTaxTypes().then(response => {
+            if (response != null) {
+                response.forEach(t => {
+                    taxTypes.value.push(t);
+                });
+            }
         });
     });
 
     const addItemToOrder = (item: Item) => {
         selectedItems.value.push(item);
-        subTotal.value += item.itemPrice;
+        calcAddSubTotal(item.itemPrice);
+        grandCalc(true);
+    }
+
+    const calcAddSubTotal = (price: number) => {
+        subTotal.value += price;
+        subTotal.value = roundMoney(subTotal.value);
+    }
+
+    const calcSubtract = (price: number) => {
+        subTotal.value -= price;
+        subTotal.value = roundMoney(subTotal.value);
+        grandCalc(false);
+    }
+
+    const grandCalc = (add: boolean) => {
+        calcDiscount();
+        calcPreTax();
+        taxTypes.value.find(t => {
+            t.taxId == "State";
+            calcStateTaxes(t, add);
+        });
+        calcFinalTotal();
+    }
+
+    const calcDiscount = () => {
+        if (selectedDiscount.value != null) {
+            discountAmount.value = subTotal.value * selectedDiscount.value.discountPercentage;
+            discountAmount.value = roundMoney(discountAmount.value);
+            calcPreTax();
+        } else {
+            discountAmount.value = 0;
+            preTax.value = subTotal.value;
+        }
+    }
+
+    const calcPreTax = () => {
+        preTax.value = subTotal.value - discountAmount.value;
+        preTax.value = roundMoney(preTax.value)
+    }
+
+    const calcStateTaxes = (tax: TaxType) => {
+        taxAmount.value = (preTax.value * tax.taxPercentage);
+        taxAmount.value = roundMoney(taxAmount.value);   
+    }
+
+    const calcFinalTotal = () => {
+        total.value = taxAmount.value + preTax.value;
+        total.value = roundMoney(total.value);
     }
 
     const removeItem = (item: Item) => {
         const index = selectedItems.value.indexOf(item);
         selectedItems.value.splice(index, 1);
-        subTotal.value -= item.itemPrice;
+        calcSubtract(item.itemPrice);
     }
 
-    const sortItemsByType = (itemTypes: ItemTypes[], itemData: Item[]): Pair<String, Item[]> [] => {
+    const sortItemsByType = (itemTypes: ItemTypes[], itemData: Item[]): Pair<String, Item[]>[] => {
         const sortedItemsAndTypes: Pair<string, Item[]>[] = [];
         itemTypes.forEach(t => {
             const newPair: Pair<string, Item[]> = { first: "", second: [] };
@@ -96,17 +190,42 @@
                     newPair.second.push(i);
                 }
             })
-            console.log(newPair)
             sortedItemsAndTypes.push(newPair);
         });
         return sortedItemsAndTypes;
     }
 
-    const placeOrder = () => {
-        return null;
+    const discountSelected = (discount: Discount) => {
+        if (discount != null) {
+            selectedDiscount.value = discount;
+            selectedDiscountName.value = discount.discountName;
+        } else {
+            selectedDiscount.value = null;
+            selectedDiscountName.value = "No discount selected";
+        }
+        calcDiscount();
+        calcFinalTotal();
     }
 
-    console.log(sortedItems.value)
+    const placeOrder = () => {
+        dataService.createOrder(total.value, preTax.value, subTotal.value, taxAmount.value, discountAmount.value, props.user, selectedItems.value).then(response => {
+            if (response != null) {
+                selectedItems.value = [];
+                selectedDiscount.value = null;
+                selectedDiscountName.value = "No discount selected";
+
+                subTotal.value = 0;
+                discountAmount.value = 0;
+                preTax.value = 0;
+                taxAmount.value = 0;
+                total.value = 0;
+            }
+        });
+    }
+
+    const roundMoney = (amount) => {
+        return (Math.round(amount * 100) / 100);
+    }
 </script>
 
 <style>
@@ -119,6 +238,10 @@
     }
 
     #order-items {
+        background-color: white;
+        height: 100%;
+        width: 100%;
+        margin-bottom: 8px;
     }
 
     #items {
@@ -146,7 +269,7 @@
 
     #new-order-container {
         margin: 0;
-        height: calc(100% - 56px); /*This compensates for the nav space*/
+        height: 100%;
         width: 100%;
     }
 
